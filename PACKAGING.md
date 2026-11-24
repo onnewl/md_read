@@ -4,6 +4,8 @@
 
 ## 基础命令
 
+使用 Node.js 24 和 pnpm 10。首次运行 `pnpm dev` 或 `pnpm preview` 时会按需下载锁定版本的 Electron 二进制文件。
+
 ```bash
 pnpm install
 pnpm build
@@ -32,6 +34,7 @@ pnpm dist:all
 
 ## 跨平台注意事项
 
+- 此版本的 Electron 要求 macOS 13（Ventura）或更新版本。
 - macOS 的 `dmg` / `zip` 最稳妥是在 macOS 上构建。
 - Windows 的 `nsis` 通常可以在 macOS / Linux 上交叉构建，但可能需要 Wine 环境；最稳妥是在 Windows CI 或 Windows 机器上构建。
 - Linux 的 `AppImage` / `deb` 最稳妥是在 Linux 或 Linux CI 上构建。

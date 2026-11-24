@@ -1,14 +1,13 @@
 import { resolve } from "node:path";
-import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { defineConfig } from "electron-vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  main: {
-    plugins: [externalizeDepsPlugin()]
-  },
+  main: {},
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
+      // 沙箱模式的 preload 需要打包依赖，并保持 CommonJS 入口。
+      externalizeDeps: false,
       rollupOptions: {
         output: {
           format: "cjs"

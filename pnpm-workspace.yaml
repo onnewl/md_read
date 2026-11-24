@@ -10,3 +10,10 @@ onlyBuiltDependencies:
   - esbuild
 
 confirmModulesPurge: false
+
+overrides:
+  # 让公式渲染和图表共用已修复安全公告的 KaTeX 版本。
+  katex: '$katex'
+  # 上游工具仍限制旧主版本，仅覆盖安全公告涉及的版本线。
+  'glob@>=9 <14.0.2': '^14.0.6'
+  'minimatch@>=7 <11.0.9': '^11.0.9'

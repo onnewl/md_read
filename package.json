@@ -11,9 +11,9 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "install-electron && electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
-    "preview": "electron-vite preview",
+    "preview": "install-electron && electron-vite preview",
     "dist": "pnpm build && electron-builder",
     "dist:mac": "pnpm build && electron-builder --mac",
     "dist:win": "pnpm build && electron-builder --win",
@@ -32,10 +32,10 @@
     "@lezer/highlight": "^1.2.3",
     "github-slugger": "^2.0.0",
     "highlight.js": "^11.11.1",
-    "katex": "^0.16.22",
+    "katex": "^0.19.1",
     "lucide-react": "^0.468.0",
     "mdast-util-to-string": "^4.0.0",
-    "mermaid": "^11.4.1",
+    "mermaid": "^11.16.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
@@ -51,16 +51,16 @@
   "devDependencies": {
     "@types/hast": "^3.0.4",
     "@types/mdast": "^4.0.4",
-    "@types/node": "^22.10.2",
+    "@types/node": "^24.9.0",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8",
-    "electron-vite": "^2.3.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.1",
+    "electron-vite": "^6.0.0",
     "license-checker-rseidelsohn": "^5.0.1",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "vite": "^6.4.6"
   },
   "build": {
     "appId": "local.markdown.viewer",
@@ -137,6 +137,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${os}-${arch}-portable.${ext}"
     }
   }
 }
