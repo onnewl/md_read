@@ -1,14 +1,16 @@
 import { ChevronRight } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { OutlineItem } from "../utils/markdownOutline";
 
 type OutlinePanelProps = {
   items: OutlineItem[];
   activeId: string;
-  onSelectItem?(item: OutlineItem): void;
+  followActive: boolean;
+  onSelectItem(item: OutlineItem): void;
 };
 
-export function OutlinePanel({ items, activeId, onSelectItem }: OutlinePanelProps) {
+/** 展示标题层级，并在正文主动改变阅读位置时将当前标题保持在目录视野内。 */
+export const OutlinePanel = memo(function OutlinePanel({ items, activeId, followActive, onSelectItem }: OutlinePanelProps) {
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const activeItemRef = useRef<HTMLButtonElement | null>(null);
 
@@ -33,10 +35,11 @@ export function OutlinePanel({ items, activeId, onSelectItem }: OutlinePanelProp
   }, [collapsedIds, items]);
 
   useEffect(() => {
-    activeItemRef.current?.scrollIntoView({
-      block: "nearest"
-    });
-  }, [activeId]);
+    // 只有正文滚动改变当前标题时才跟随，用户点击的目录项已经在视野内。
+    if (followActive) {
+      activeItemRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeId, followActive]);
 
   useEffect(() => {
     setCollapsedIds((current) => {
@@ -45,39 +48,6 @@ export function OutlinePanel({ items, activeId, onSelectItem }: OutlinePanelProp
       return next.size === current.size ? current : next;
     });
   }, [items]);
-
-  const handlePreviewClick = (id: string) => {
-    const target = document.getElementById(id) ?? document.getElementById(`user-content-${id}`);
-    if (!target) {
-      return;
-    }
-
-    const scrollRoot = target.closest<HTMLElement>(".document-scroll");
-    if (!scrollRoot) {
-      target.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-      });
-      return;
-    }
-
-    // 正文是独立滚动容器，直接计算容器内偏移比依赖全局 scrollIntoView 更稳定。
-    const rootTop = scrollRoot.getBoundingClientRect().top;
-    const targetTop = target.getBoundingClientRect().top;
-    scrollRoot.scrollTo({
-      top: scrollRoot.scrollTop + targetTop - rootTop - 12,
-      behavior: "smooth"
-    });
-  };
-
-  const handleClick = (item: OutlineItem) => {
-    if (onSelectItem) {
-      onSelectItem(item);
-      return;
-    }
-
-    handlePreviewClick(item.id);
-  };
 
   const toggleCollapsed = (item: OutlineItem) => {
     setCollapsedIds((current) => {
@@ -99,8 +69,7 @@ export function OutlinePanel({ items, activeId, onSelectItem }: OutlinePanelProp
       ) : (
         <nav>
           {visibleItems.map((item) => {
-            const itemIndex = items.findIndex((outlineItem) => outlineItem.id === item.id);
-            const hasChildren = itemIndex >= 0 && items[itemIndex + 1]?.depth > item.depth;
+            const hasChildren = items[item.index + 1]?.depth > item.depth;
             const isCollapsed = collapsedIds.has(item.id);
 
             return (
@@ -125,7 +94,8 @@ export function OutlinePanel({ items, activeId, onSelectItem }: OutlinePanelProp
                   ref={item.id === activeId ? activeItemRef : undefined}
                   type="button"
                   className={item.id === activeId ? "outline-item is-active" : "outline-item"}
-                  onClick={() => handleClick(item)}
+                  aria-current={item.id === activeId ? "location" : undefined}
+                  onClick={() => onSelectItem(item)}
                   title={item.text}
                 >
                   <span className="outline-item__marker">H{item.depth}</span>
@@ -138,4 +108,4 @@ export function OutlinePanel({ items, activeId, onSelectItem }: OutlinePanelProp
       )}
     </aside>
   );
-}
+});

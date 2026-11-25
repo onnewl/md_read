@@ -32,7 +32,7 @@ type SourceEditorProps = {
   initialRevealOffset?: number;
   editorViewRef: MutableRefObject<EditorView | null>;
   onChange(value: string): void;
-  onActiveOffsetChange(offset: number): void;
+  onActiveOffsetChange?(offset: number): void;
 };
 
 function createEditorTheme(): Extension {
@@ -48,7 +48,7 @@ function createEditorTheme(): Extension {
       lineHeight: "1.7"
     },
     ".cm-content": {
-      minHeight: "calc(100vh - 112px)",
+      minHeight: "100%",
       padding: "calc(18px * var(--document-zoom)) 0"
     },
     ".cm-line": {
@@ -91,7 +91,7 @@ function createEditorTheme(): Extension {
  * @param initialRevealOffset 编辑器首次挂载后需要显示的源码字符偏移。
  * @param editorViewRef CodeMirror 实例引用，供搜索和大纲跳转定位。
  * @param onChange 草稿变更回调，保存动作由外层统一处理。
- * @param onActiveOffsetChange 光标移动或源码滚动时上报当前文档偏移，用于联动大纲。
+ * @param onActiveOffsetChange 可选。源码单栏用光标与视口位置联动大纲。
  */
 export function SourceEditor({
   value,
@@ -107,6 +107,7 @@ export function SourceEditor({
   const onActiveOffsetChangeRef = useRef(onActiveOffsetChange);
   const initialRevealOffsetRef = useRef(initialRevealOffset);
   const isSyncingRef = useRef(false);
+  const syncedValueRef = useRef(value);
   const themeCompartment = useMemo(() => new Compartment(), []);
 
   useEffect(() => {
@@ -153,17 +154,19 @@ export function SourceEditor({
           }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !isSyncingRef.current) {
-              onChangeRef.current(update.state.doc.toString());
+              const nextValue = update.state.doc.toString();
+              syncedValueRef.current = nextValue;
+              onChangeRef.current(nextValue);
             }
 
             if (update.selectionSet || update.docChanged) {
-              onActiveOffsetChangeRef.current(update.state.selection.main.head);
+              onActiveOffsetChangeRef.current?.(update.state.selection.main.head);
             } else if (update.viewportChanged) {
               const cursorOffset = update.state.selection.main.head;
               const { from, to } = update.view.viewport;
 
               // 跳转会让光标居中并再次触发视口变化；光标仍可见时优先保留目标标题。
-              onActiveOffsetChangeRef.current(cursorOffset >= from && cursorOffset <= to ? cursorOffset : from);
+              onActiveOffsetChangeRef.current?.(cursorOffset >= from && cursorOffset <= to ? cursorOffset : from);
             }
           }),
           keymap.of([...searchKeymap, indentWithTab, ...historyKeymap, ...defaultKeymap]),
@@ -174,7 +177,8 @@ export function SourceEditor({
     });
 
     editorViewRef.current = view;
-    onActiveOffsetChangeRef.current(revealOffset);
+    syncedValueRef.current = value;
+    onActiveOffsetChangeRef.current?.(revealOffset);
     const revealFrame = window.requestAnimationFrame(() => {
       if (editorViewRef.current !== view) {
         return;
@@ -197,12 +201,8 @@ export function SourceEditor({
 
   useEffect(() => {
     const view = editorViewRef.current;
-    if (!view) {
-      return;
-    }
-
-    const currentValue = view.state.doc.toString();
-    if (currentValue === value) {
+    // 父组件回传的草稿与编辑器已应用的内容相同，避免每次输入再序列化全文。
+    if (!view || syncedValueRef.current === value) {
       return;
     }
 
@@ -214,6 +214,7 @@ export function SourceEditor({
         insert: value
       }
     });
+    syncedValueRef.current = value;
     isSyncingRef.current = false;
   }, [editorViewRef, value]);
 

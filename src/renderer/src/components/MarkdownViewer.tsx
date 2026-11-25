@@ -1,20 +1,20 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { Element, Root } from "hast";
+import type { Root as MarkdownRoot } from "mdast";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
 import { visit } from "unist-util-visit";
 import { MermaidBlock } from "./MermaidBlock";
 import { CodeBlock } from "./CodeBlock";
 import type { Theme } from "../hooks/useTheme";
-import { remarkHeadingIds } from "../utils/markdownOutline";
+import { remarkParsedDocument } from "../utils/markdownOutline";
 
 type MarkdownViewerProps = {
   content: string;
+  tree: MarkdownRoot;
   baseDir: string;
   theme: Theme;
   contentRef: React.RefObject<HTMLElement>;
@@ -82,8 +82,9 @@ function getLanguage(className?: string): string | undefined {
   return /language-([\w-]+)/.exec(className ?? "")?.[1];
 }
 
-function MarkdownViewerContent({ content, baseDir, theme, contentRef }: MarkdownViewerProps) {
-  const components: Components = {
+function MarkdownViewerContent({ content, tree, baseDir, theme, contentRef }: MarkdownViewerProps) {
+  // 保持组件类型稳定，编辑普通文字时让未变动的图表继续复用已有 SVG。
+  const components = useMemo<Components>(() => ({
     a({ href, children, ...props }) {
       const safeHref = href ?? "";
 
@@ -156,12 +157,12 @@ function MarkdownViewerContent({ content, baseDir, theme, contentRef }: Markdown
 
       return <CodeBlock code={code} language={language} />;
     }
-  };
+  }), [baseDir, theme]);
 
   return (
     <article ref={contentRef} className="markdown-body">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath, remarkHeadingIds]}
+        remarkPlugins={[[remarkParsedDocument, tree]]}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex, rehypeSourcePositions]}
         components={components}
       >
@@ -172,13 +173,13 @@ function MarkdownViewerContent({ content, baseDir, theme, contentRef }: Markdown
 }
 
 /**
- * Markdown 正文渲染成本较高，且预览搜索会在渲染后的 DOM 中插入 mark。
- * 只在文档内容、资源目录或主题变化时重渲染，避免搜索状态刷新破坏高亮 DOM。
+ * 缓存正文渲染，避免搜索和滚动状态刷新时重建正文及关联的搜索高亮。
  */
 export const MarkdownViewer = memo(
   MarkdownViewerContent,
   (previous, next) =>
     previous.content === next.content &&
+    previous.tree === next.tree &&
     previous.baseDir === next.baseDir &&
     previous.theme === next.theme &&
     previous.contentRef === next.contentRef

@@ -1,9 +1,10 @@
 import { EditorView } from "@codemirror/view";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { EmptyState } from "./components/EmptyState";
 import { MarkdownViewer } from "./components/MarkdownViewer";
 import { OutlinePanel } from "./components/OutlinePanel";
 import { SourceEditor } from "./components/SourceEditor";
+import { SplitDivider } from "./components/SplitDivider";
 import { TabBar } from "./components/TabBar";
 import { TopBar } from "./components/TopBar";
 import type { ViewMode } from "./components/TopBar";
@@ -12,7 +13,7 @@ import { useOutline } from "./hooks/useOutline";
 import { useSearchHighlight } from "./hooks/useSearchHighlight";
 import { useTheme } from "./hooks/useTheme";
 import type { MarkdownFilePayload } from "./types/global";
-import { extractOutline, type OutlineItem } from "./utils/markdownOutline";
+import { parseMarkdownDocument, type OutlineItem } from "./utils/markdownOutline";
 import { isMarkdownFilePath } from "./utils/pathUtils";
 import { getPreviewSourceOffset, scrollPreviewToSourceOffset } from "./utils/viewPosition";
 import type { MenuCommand } from "../../shared/menuCommands";
@@ -24,6 +25,7 @@ const maxRecentFiles = 8;
 const minZoom = 0.7;
 const maxZoom = 1.6;
 const zoomStep = 0.1;
+const draftParseDelay = 180;
 
 type DocumentTab = MarkdownFilePayload & {
   id: string;
@@ -92,6 +94,7 @@ export default function App() {
   const [recentFiles, setRecentFiles] = useState<string[]>(() => loadRecentFiles());
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState("");
+  const [startupReady, setStartupReady] = useState(false);
   const [isOutlineOpen, setIsOutlineOpen] = useState(() => getInitialOutlineOpen());
   const [documentZoom, setDocumentZoom] = useState(1);
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
@@ -100,7 +103,8 @@ export default function App() {
   const [sourceRevealRequest, setSourceRevealRequest] = useState<{ documentId: string; offset: number } | null>(null);
   const { theme, toggleTheme } = useTheme();
 
-  const scrollRootRef = useRef<HTMLDivElement>(null);
+  const scrollRootRef = useRef<HTMLElement>(null);
+  const previewPaneId = useId();
   const contentRootRef = useRef<HTMLElement>(null);
   const sourceEditorRef = useRef<EditorView | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -114,24 +118,58 @@ export default function App() {
   const isDirty = Boolean(activeDocument && activeDocument.draftContent !== activeDocument.content);
   const hasDirtyDocuments = openDocuments.some((documentItem) => documentItem.draftContent !== documentItem.content);
   const activeContent = activeDocument?.draftContent ?? "";
-  const outline = useMemo(() => extractOutline(activeContent), [activeContent]);
-  const activeHeadingId = useOutline(scrollRootRef, contentRootRef, outline);
+  const showPreview = viewMode !== "source";
+  const showSource = viewMode !== "preview";
+  const [parsedDraft, setParsedDraft] = useState<{ id: string; content: string } | null>(null);
+  const parsedContent = showSource && parsedDraft?.id === activeDocumentId
+    ? parsedDraft.content
+    : activeContent;
+  const { tree, outline } = useMemo(() => parseMarkdownDocument(parsedContent), [parsedContent]);
+
+  useEffect(() => {
+    if (!showSource || !activeDocumentId) {
+      setParsedDraft(null);
+      return;
+    }
+
+    // 切换文档时立即显示新文档，连续输入时预览与大纲共用同一次延迟解析。
+    if (parsedDraft?.id !== activeDocumentId) {
+      setParsedDraft({ id: activeDocumentId, content: activeContent });
+      return;
+    }
+    if (parsedDraft.content === activeContent) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setParsedDraft({ id: activeDocumentId, content: activeContent });
+    }, draftParseDelay);
+    return () => window.clearTimeout(timer);
+  }, [activeContent, activeDocumentId, parsedDraft, showSource]);
+
+  const {
+    activeId: activeHeadingId,
+    followActive: followPreviewHeading,
+    selectHeading: selectPreviewHeading
+  } = useOutline(scrollRootRef, contentRootRef, outline, showPreview ? activeDocumentId : "");
   const previewSearch = useSearchHighlight(
     contentRootRef,
-    searchQuery,
-    `${activeDocument?.id ?? "empty"}:${viewMode}:preview`
+    showPreview ? searchQuery : "",
+    showPreview ? activeDocumentId : "",
+    tree
   );
+  const sourceSearchQuery = viewMode === "source" ? searchQuery : "";
   const sourceSearch = useCodeMirrorSearch(
     sourceEditorRef,
-    activeContent,
-    searchQuery,
-    `${activeDocument?.id ?? "empty"}:${viewMode}:source`
+    sourceSearchQuery ? activeContent : "",
+    sourceSearchQuery,
+    viewMode === "source" ? activeDocumentId : ""
   );
   const search = viewMode === "source" ? sourceSearch : previewSearch;
   const [sourceActiveOffset, setSourceActiveOffset] = useState(0);
   const sourceActiveHeadingId = useMemo(
-    () => findSourceHeadingId(outline, sourceActiveOffset),
-    [outline, sourceActiveOffset]
+    () => showPreview ? "" : findSourceHeadingId(outline, sourceActiveOffset),
+    [outline, showPreview, sourceActiveOffset]
   );
 
   const rememberRecentFile = useCallback((filePath: string) => {
@@ -148,7 +186,7 @@ export default function App() {
   }, []);
 
   const commitDocument = useCallback(
-    (payload: MarkdownFilePayload, shouldResetViewMode = true) => {
+    (payload: MarkdownFilePayload, mode: "open" | "replace" = "open") => {
       const nextDocument = createDocumentTab(payload);
       setOpenDocuments((current) => {
         const existingIndex = current.findIndex((item) => item.id === nextDocument.id);
@@ -156,13 +194,18 @@ export default function App() {
           return [...current, nextDocument];
         }
 
+        // 两个打开请求可能同时读到了同一文件，后返回的请求只激活已有标签，保留草稿。
+        if (mode === "open") {
+          return current;
+        }
+
         const next = [...current];
         next[existingIndex] = nextDocument;
         return next;
       });
       setActiveDocumentId(nextDocument.id);
-      if (shouldResetViewMode) {
-        setViewMode("preview");
+      if (mode === "open") {
+        setViewMode((current) => current === "split" ? current : "preview");
       }
       setSearchQuery("");
       setError("");
@@ -351,13 +394,32 @@ export default function App() {
     }
   };
 
-  const readFile = async (filePath: string) => {
+  const readFile = useCallback(async (filePath: string) => {
     try {
       await openOrFocusFile(filePath);
     } catch (readError) {
       setError(readError instanceof Error ? readError.message : "文件读取失败");
     }
-  };
+  }, [openOrFocusFile]);
+
+  const readExternalFileRef = useRef(readFile);
+  useEffect(() => {
+    readExternalFileRef.current = readFile;
+  }, [readFile]);
+
+  useEffect(() => {
+    let subscribed = true;
+    let pending = Promise.resolve();
+    const unsubscribe = window.mdApi?.onExternalFileOpen((filePath) => {
+      // 保持双击顺序，让读盘较慢的旧请求不会在后续文件打开后抢回当前标签。
+      pending = pending.then(() => subscribed ? readExternalFileRef.current(filePath) : undefined);
+    });
+
+    return () => {
+      subscribed = false;
+      unsubscribe?.();
+    };
+  }, []);
 
   const refreshFile = async () => {
     try {
@@ -371,7 +433,7 @@ export default function App() {
       }
 
       const payload = await window.mdApi.readMarkdownFile(activeDocument.filePath);
-      commitDocument(payload, false);
+      commitDocument(payload, "replace");
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : "刷新文件失败");
     }
@@ -390,7 +452,7 @@ export default function App() {
 
       setIsSaving(true);
       const payload = await window.mdApi.saveMarkdownFile(activeDocument.filePath, activeDocument.draftContent);
-      commitDocument(payload, false);
+      commitDocument(payload, "replace");
       setStatusMessage("已保存");
       window.setTimeout(() => setStatusMessage(""), 1600);
     } catch (saveError) {
@@ -430,7 +492,8 @@ export default function App() {
       return;
     }
 
-    if (viewMode === "preview" && mode === "source") {
+    // 只定位新出现的一侧，继续显示的编辑器保留滚动位置和撤销记录。
+    if (!showSource && mode !== "preview") {
       const headingOffset = outline.find((item) => item.id === activeHeadingId)?.offset ?? 0;
       const scrollRoot = scrollRootRef.current;
       const contentRoot = contentRootRef.current;
@@ -440,38 +503,61 @@ export default function App() {
       });
     }
 
-    if (viewMode === "source" && mode === "preview") {
+    const editorView = sourceEditorRef.current;
+    if (!showPreview && mode !== "source") {
+      if (mode === "split" && parsedContent !== activeContent) {
+        // 首次对齐两侧时，让预览按编辑器里的最新源码位置定位。
+        setParsedDraft({ id: activeDocument.id, content: activeContent });
+      }
       pendingPreviewOffsetRef.current = {
         documentId: activeDocument.id,
-        offset: sourceEditorRef.current
-          ? getSourceViewportOffset(sourceEditorRef.current)
-          : sourceActiveOffset
+        offset: editorView ? getSourceViewportOffset(editorView) : sourceActiveOffset
       };
+    }
+
+    if (viewMode === "split" && mode === "source" && editorView) {
+      setSourceActiveOffset(getSourceViewportOffset(editorView));
     }
 
     setViewMode(mode);
   };
 
-  const selectSourceHeading = useCallback((item: OutlineItem) => {
+  const selectOutlineHeading = useCallback((item: OutlineItem) => {
+    if (showPreview) {
+      selectPreviewHeading(item);
+    }
+
     const editorView = sourceEditorRef.current;
     if (!editorView) {
       return;
     }
 
-    const start = Math.max(0, Math.min(item.offset, editorView.state.doc.length));
+    // 只在点击时读取当前源码。大纲滞后时，用最新草稿计算目标位置。
+    const editorContent = editorView.state.doc.toString();
+    const target = parsedContent === editorContent
+      ? item
+      : parseMarkdownDocument(editorContent).outline.find((heading) => heading.id === item.id);
+    if (!target) {
+      return;
+    }
+    const start = Math.max(0, Math.min(target.offset, editorView.state.doc.length));
+
+    const reveal = EditorView.scrollIntoView(start, { y: "center", x: "nearest" });
+    if (showPreview) {
+      // 分栏中定位源码时保留光标和选区，避免目录点击打断正在编辑的位置。
+      editorView.dispatch({ effects: reveal });
+      return;
+    }
 
     setSourceActiveOffset(start);
     editorView.dispatch({
       selection: {
         anchor: start
       },
-      effects: EditorView.scrollIntoView(start, {
-        y: "center",
-        x: "nearest"
-      })
+      effects: reveal
     });
     editorView.focus();
-  }, []);
+  }, [parsedContent, selectPreviewHeading, showPreview]);
 
   // 菜单监听只注册一次，通过 ref 始终调用当前渲染对应的文档操作，避免重复订阅全局 IPC 事件。
   menuCommandHandlerRef.current = (command) => {
@@ -519,13 +605,56 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+
+    // 界面挂载后主动取启动文件，避免主进程在 React 就绪前发送事件。
+    void window.mdApi?.openStartupMarkdownFile().then(
+      (payload) => {
+        if (mounted && payload) {
+          commitDocument(payload);
+        }
+      },
+      (error: unknown) => {
+        if (mounted) {
+          setError(error instanceof Error ? error.message : "打开启动文件失败");
+        }
+      }
+    ).finally(() => {
+      if (mounted) {
+        setStartupReady(true);
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [commitDocument]);
+
+  useEffect(() => {
+    if (!startupReady) {
+      return;
+    }
+
+    // 等提交后的界面有机会真正绘制一帧，避免显示时仍停留在空白背景。
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => window.mdApi?.showStartupWindow());
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [startupReady]);
+
+  useEffect(() => {
     setSourceActiveOffset(0);
     pendingPreviewOffsetRef.current = null;
   }, [activeDocument?.id]);
 
   useEffect(() => {
     const pending = pendingPreviewOffsetRef.current;
-    if (viewMode !== "preview" || !activeDocument || pending?.documentId !== activeDocument.id) {
+    if (!showPreview || !activeDocument || pending?.documentId !== activeDocument.id) {
       return;
     }
 
@@ -552,7 +681,7 @@ export default function App() {
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [activeDocument, outline, viewMode]);
+  }, [activeDocument, outline, showPreview]);
 
   useEffect(() => {
     localStorage.removeItem(zoomKey);
@@ -673,40 +802,49 @@ export default function App() {
         {isOutlineOpen ? (
           <OutlinePanel
             items={outline}
-            activeId={viewMode === "source" ? sourceActiveHeadingId : activeHeadingId}
-            onSelectItem={viewMode === "source" ? selectSourceHeading : undefined}
+            activeId={showPreview ? activeHeadingId : sourceActiveHeadingId}
+            followActive={!showPreview || followPreviewHeading}
+            onSelectItem={selectOutlineHeading}
           />
         ) : null}
-        <section
-          ref={scrollRootRef}
-          className="document-scroll"
-          aria-label="Markdown 正文"
+        <div
+          className={viewMode === "split" && activeDocument ? "document-panes document-panes--split" : "document-panes"}
           style={{ "--document-zoom": documentZoom } as CSSProperties}
         >
-          {activeDocument && viewMode === "preview" ? (
-            <MarkdownViewer
-              content={activeContent}
-              baseDir={activeDocument.baseDir}
-              theme={theme}
-              contentRef={contentRootRef}
-            />
-          ) : activeDocument ? (
-            <SourceEditor
-              key={activeDocument.id}
-              value={activeContent}
-              fileName={activeDocument.fileName}
-              theme={theme}
-              initialRevealOffset={
-                sourceRevealRequest?.documentId === activeDocument.id ? sourceRevealRequest.offset : 0
-              }
-              editorViewRef={sourceEditorRef}
-              onChange={updateActiveDraftContent}
-              onActiveOffsetChange={setSourceActiveOffset}
-            />
-          ) : (
-            <EmptyState onOpen={openFile} />
-          )}
-        </section>
+          {activeDocument && showPreview ? (
+            <section id={previewPaneId} ref={scrollRootRef} className="document-scroll" aria-label="Markdown 预览">
+              <MarkdownViewer
+                content={parsedContent}
+                tree={tree}
+                baseDir={activeDocument.baseDir}
+                theme={theme}
+                contentRef={contentRootRef}
+              />
+            </section>
+          ) : null}
+          {viewMode === "split" && activeDocument ? <SplitDivider previewId={previewPaneId} /> : null}
+          {activeDocument && showSource ? (
+            <section className="document-scroll document-scroll--source" aria-label="Markdown 源码">
+              <SourceEditor
+                key={activeDocument.id}
+                value={activeContent}
+                fileName={activeDocument.fileName}
+                theme={theme}
+                initialRevealOffset={
+                  sourceRevealRequest?.documentId === activeDocument.id ? sourceRevealRequest.offset : 0
+                }
+                editorViewRef={sourceEditorRef}
+                onChange={updateActiveDraftContent}
+                onActiveOffsetChange={showPreview ? undefined : setSourceActiveOffset}
+              />
+            </section>
+          ) : null}
+          {!activeDocument ? (
+            <div className="document-scroll">
+              <EmptyState onOpen={openFile} />
+            </div>
+          ) : null}
+        </div>
       </main>
     </div>
   );

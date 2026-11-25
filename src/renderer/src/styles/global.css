@@ -545,8 +545,45 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-.document-scroll {
+.document-panes {
   --document-zoom: 1;
+  --document-inline-gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.document-panes--split {
+  --split-divider-width: 10px;
+  grid-template-columns:
+    minmax(0, calc((100% - var(--split-divider-width)) * var(--split-preview-share, 0.5)))
+    var(--split-divider-width)
+    minmax(0, 1fr);
+}
+
+.split-divider {
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.split-divider::before {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(50% - 0.5px);
+  width: 1px;
+  background: var(--border);
+  content: "";
+}
+
+.split-divider:hover,
+.split-divider:focus-visible {
+  background: var(--accent-soft);
+}
+
+.document-scroll {
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -583,16 +620,14 @@ input:focus-visible {
   display: flex;
   min-height: 100%;
   height: 100%;
-  padding: calc(24px * var(--document-zoom)) calc(32px * var(--document-zoom));
+  padding: calc(24px * var(--document-zoom)) calc(var(--document-inline-gap) * var(--document-zoom));
   background: var(--bg);
 }
 
 .source-editor__codemirror {
   display: block;
-  width: min(100%, calc(1040px * var(--document-zoom)));
-  height: calc(100vh - 112px);
-  min-height: 420px;
-  margin: 0 auto;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -620,20 +655,38 @@ input:focus-visible {
   overflow: auto;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 1160px) {
   .top-bar {
     height: auto;
     min-height: 54px;
+    flex-basis: auto;
     flex-wrap: wrap;
     padding-block: 10px;
   }
 
-  .top-bar__right,
-  .search-box {
+  .top-bar__left,
+  .top-bar__right {
     width: 100%;
   }
 
-  .workspace {
+  .search-box {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .search-box input {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 860px) {
+  .workspace:not(.workspace--outline-closed) {
     grid-template-columns: 220px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .document-panes {
+    --document-inline-gap: 12px;
   }
 }

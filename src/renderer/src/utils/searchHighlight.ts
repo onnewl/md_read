@@ -7,7 +7,7 @@ type HighlightRegistry = {
   delete(name: string): boolean;
 };
 
-type HighlightConstructor = new (...ranges: Range[]) => unknown;
+type HighlightConstructor = new () => { add(range: Range): unknown };
 
 type TextSegment = {
   node: Text;
@@ -28,7 +28,16 @@ function getHighlightRegistry(): HighlightRegistry | null {
 
 function createHighlight(ranges: Range[]): unknown | null {
   const HighlightClass = (globalThis as typeof globalThis & { Highlight?: HighlightConstructor }).Highlight;
-  return HighlightClass ? new HighlightClass(...ranges) : null;
+  if (!HighlightClass) {
+    return null;
+  }
+
+  // 高频词可能命中大量节点，逐个添加 Range 可以避开展开参数的数量上限。
+  const highlight = new HighlightClass();
+  for (const range of ranges) {
+    highlight.add(range);
+  }
+  return highlight;
 }
 
 function findMatches(text: string, query: string): number[] {
@@ -104,27 +113,38 @@ function createSegments(textNodes: Text[]): TextSegment[] {
   });
 }
 
-function createRangeAcrossSegments(segments: TextSegment[], start: number, end: number): Range | null {
-  const startSegment = segments.find((segment) => start >= segment.start && start < segment.end);
-  const endSegment = segments.find((segment) => end > segment.start && end <= segment.end);
-  if (!startSegment || !endSegment) {
-    return null;
-  }
-
-  const range = document.createRange();
-  range.setStart(startSegment.node, start - startSegment.start);
-  range.setEnd(endSegment.node, end - endSegment.start);
-  return range;
-}
-
+/** 将代码块里的命中映射到高亮令牌，允许一个 Range 跨越多个文本节点。 */
 function createCodeBlockRanges(codeElement: HTMLElement, query: string): Range[] {
   const textNodes = collectTextNodes(codeElement, false);
   const segments = createSegments(textNodes);
   const codeText = segments.map((segment) => segment.text).join("");
+  const ranges: Range[] = [];
+  let startIndex = 0;
+  let endIndex = 0;
 
-  return findMatches(codeText, query)
-    .map((index) => createRangeAcrossSegments(segments, index, index + query.length))
-    .filter((range): range is Range => Boolean(range));
+  // 命中按源码顺序返回，两个游标只前移。起点在边界时取后一个节点，终点取前一个节点。
+  for (const start of findMatches(codeText, query)) {
+    const end = start + query.length;
+    while (startIndex < segments.length && segments[startIndex].end <= start) {
+      startIndex++;
+    }
+    while (endIndex < segments.length && segments[endIndex].end < end) {
+      endIndex++;
+    }
+
+    const startSegment = segments[startIndex];
+    const endSegment = segments[endIndex];
+    if (!startSegment || !endSegment) {
+      break;
+    }
+
+    const range = document.createRange();
+    range.setStart(startSegment.node, start - startSegment.start);
+    range.setEnd(endSegment.node, end - endSegment.start);
+    ranges.push(range);
+  }
+
+  return ranges;
 }
 
 function collectSearchRanges(root: HTMLElement, query: string): Range[] {
@@ -139,7 +159,9 @@ function collectSearchRanges(root: HTMLElement, query: string): Range[] {
 
   // highlight.js 会把一段代码拆成多个 span；Range 可以跨 token 高亮，且完全不改写 React 管理的 DOM。
   for (const codeElement of root.querySelectorAll<HTMLElement>(".code-block pre code")) {
-    ranges.push(...createCodeBlockRanges(codeElement, normalizedQuery));
+    for (const range of createCodeBlockRanges(codeElement, normalizedQuery)) {
+      ranges.push(range);
+    }
   }
 
   // 普通正文和代码块分别收集，合并后按 DOM 起点排序才能保持从上到下的导航顺序。

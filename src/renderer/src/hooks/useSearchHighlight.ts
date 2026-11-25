@@ -6,7 +6,20 @@ import {
   scrollToSearchMatch
 } from "../utils/searchHighlight";
 
-export function useSearchHighlight(rootRef: RefObject<HTMLElement>, query: string, contentKey: string) {
+/**
+ * 搜索已渲染的正文，并在查询清空时尝试恢复之前的滚动位置。
+ * @param rootRef 正文节点引用。
+ * @param query 查询文本。
+ * @param contentKey 当前预览文档 ID，预览关闭时为空。
+ * @param renderedTree 当前渲染的语法树，更新后重建指向正文节点的高亮范围。
+ * @returns 搜索计数、当前索引及跳转方法。
+ */
+export function useSearchHighlight(
+  rootRef: RefObject<HTMLElement>,
+  query: string,
+  contentKey: string,
+  renderedTree: object
+) {
   const [matchCount, setMatchCount] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const restoreScrollTopRef = useRef<number | null>(null);
@@ -17,46 +30,49 @@ export function useSearchHighlight(rootRef: RefObject<HTMLElement>, query: strin
 
   useEffect(() => {
     const root = rootRef.current;
-    if (!root) {
+    const trimmedQuery = query.trim();
+    if (!root || !trimmedQuery) {
       setMatchCount(0);
       setCurrentIndex(-1);
-      return;
-    }
-
-    const scrollRoot = root.closest<HTMLElement>(".document-scroll");
-    const trimmedQuery = query.trim();
-    if (trimmedQuery && restoreScrollTopRef.current === null) {
-      restoreScrollTopRef.current = scrollRoot?.scrollTop ?? null;
-    }
-
-    if (!trimmedQuery && restoreScrollTopRef.current !== null) {
       const restoreTop = restoreScrollTopRef.current;
       restoreScrollTopRef.current = null;
-      requestAnimationFrame(() => {
-        scrollRoot?.scrollTo({
+      const scrollRoot = root?.closest<HTMLElement>(".document-scroll");
+      if (!scrollRoot || restoreTop === null) {
+        return;
+      }
+
+      const frame = requestAnimationFrame(() => {
+        scrollRoot.scrollTo({
           top: restoreTop,
           behavior: "smooth"
         });
       });
+      return () => cancelAnimationFrame(frame);
     }
 
+    if (restoreScrollTopRef.current === null) {
+      restoreScrollTopRef.current = root.closest<HTMLElement>(".document-scroll")?.scrollTop ?? null;
+    }
+
+    let revealFrame = 0;
     const timer = window.setTimeout(() => {
-      const nextMatches = highlightSearch(root, query);
+      const nextMatches = highlightSearch(root, trimmedQuery);
       const nextMatchCount = nextMatches.length;
 
       setMatchCount(nextMatchCount);
       setCurrentIndex(nextMatchCount > 0 ? 0 : -1);
 
       if (nextMatchCount > 0) {
-        requestAnimationFrame(() => scrollToSearchMatch(0));
+        revealFrame = requestAnimationFrame(() => scrollToSearchMatch(0));
       }
     }, 150);
 
     return () => {
       window.clearTimeout(timer);
+      cancelAnimationFrame(revealFrame);
       clearSearchHighlights(root);
     };
-  }, [contentKey, query, rootRef]);
+  }, [contentKey, query, renderedTree, rootRef]);
 
   useEffect(() => {
     if (currentIndex >= 0) {

@@ -1,4 +1,5 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, protocol, shell, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, protocol, shell, type MenuItemConstructorOptions } from "electron";
+import { mkdirSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { extname, basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,11 @@ type MarkdownFilePayload = {
   fileName: string;
   baseDir: string;
   content: string;
+};
+
+type WorkspaceWindow = {
+  window: BrowserWindow;
+  activate(filePath?: string): void;
 };
 
 const markdownExtensions = new Set([".md", ".markdown"]);
@@ -23,7 +29,7 @@ const imageMimeTypes = new Map([
 const openedMarkdownDirs = new Set<string>();
 const unsavedWindowIds = new Set<number>();
 const productName = "Markdown Viewer";
-let applicationWindow: BrowserWindow | null = null;
+let applicationWindow: WorkspaceWindow | null = null;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -291,14 +297,15 @@ function asBrowserWindow(window: Electron.BaseWindow | undefined): BrowserWindow
 
 /**
  * 将固定的应用菜单命令发送给主工作区窗口。
- * 关于和许可证窗口没有 preload，始终定向到应用主窗口可避免误发到子窗口。
+ * 关于和许可证窗口没有 preload，菜单始终发送给工作区窗口。
  */
 function sendMenuCommand(command: MenuCommand): void {
-  if (!applicationWindow || applicationWindow.isDestroyed()) {
+  const window = applicationWindow?.window;
+  if (!window || window.isDestroyed()) {
     return;
   }
 
-  applicationWindow.webContents.send("app:menu-command", command);
+  window.webContents.send("app:menu-command", command);
 }
 
 function createApplicationMenu(): void {
@@ -466,14 +473,16 @@ function registerAssetProtocol(): void {
   });
 }
 
-function createWindow(): BrowserWindow {
+/** 创建工作区窗口，并在首页或启动文档绘制完成后按顺序交付额外的打开请求。 */
+function createWindow(startupFile?: string): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 920,
     minHeight: 620,
     title: "Markdown Viewer",
-    backgroundColor: "#0f172a",
+    show: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0d1117" : "#f6f8fb",
     webPreferences: {
       preload: resolve(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -481,7 +490,72 @@ function createWindow(): BrowserWindow {
       sandbox: true
     }
   });
-  applicationWindow = mainWindow;
+  mainWindow.webContents.ipc.handle("markdown:open-startup-file", () =>
+    startupFile ? readMarkdownFile(startupFile) : null
+  );
+
+  const pendingFiles: string[] = [];
+  let hasPainted = false;
+  let startupRendered = false;
+  let startupFinished = false;
+  applicationWindow = {
+    window: mainWindow,
+    activate(filePath) {
+      // 窗口可能还在等待首屏，先排队，避免提前亮窗或在渲染端订阅前丢掉文件。
+      if (!startupFinished) {
+        if (filePath) {
+          pendingFiles.push(filePath);
+        }
+        return;
+      }
+
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+      if (filePath) {
+        mainWindow.webContents.send("markdown:open-external-file", filePath);
+      }
+    }
+  };
+
+  const showWhenReady = () => {
+    if (startupFinished || !hasPainted || !startupRendered) {
+      return;
+    }
+
+    startupFinished = true;
+    clearTimeout(startupTimeout);
+    mainWindow.show();
+    for (const filePath of pendingFiles) {
+      mainWindow.webContents.send("markdown:open-external-file", filePath);
+    }
+    pendingFiles.length = 0;
+  };
+
+  const failStartup = (detail: string) => {
+    if (startupFinished || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    startupFinished = true;
+    clearTimeout(startupTimeout);
+    // 渲染失败时用原生对话框报告错误，避免把空的 BrowserWindow 当作兜底界面。
+    dialog.showErrorBox("Markdown Viewer 启动失败", detail);
+    mainWindow.destroy();
+  };
+
+  const startupTimeout = setTimeout(() => failStartup("等待应用界面超时，请重新打开 Markdown Viewer。"), 15000);
+  // Electron 的首次绘制可能发生在正文提交前，需同时等渲染进程确认正文或首页已就绪。
+  mainWindow.once("ready-to-show", () => {
+    hasPainted = true;
+    showWhenReady();
+  });
+  mainWindow.webContents.ipc.once("window:startup-rendered", () => {
+    startupRendered = true;
+    showWhenReady();
+  });
+  mainWindow.webContents.once("render-process-gone", () => failStartup("应用界面意外退出，请重新打开 Markdown Viewer。"));
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -515,22 +589,24 @@ function createWindow(): BrowserWindow {
   });
 
   mainWindow.on("closed", () => {
+    clearTimeout(startupTimeout);
     unsavedWindowIds.delete(webContentsId);
-    if (applicationWindow === mainWindow) {
+    if (applicationWindow?.window === mainWindow) {
       applicationWindow = null;
     }
   });
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
-  } else {
-    void mainWindow.loadFile(resolve(__dirname, "../renderer/index.html"));
-  }
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  const load = rendererUrl
+    ? mainWindow.loadURL(rendererUrl)
+    : mainWindow.loadFile(resolve(__dirname, "../renderer/index.html"));
+  void load.catch(() => failStartup("无法加载应用界面，请检查 Markdown Viewer 文件是否完整。"));
 
   return mainWindow;
 }
 
-app.whenReady().then(() => {
+/** 注册应用菜单与文件操作，并打开本次启动对应的阅读窗口。 */
+function initializeApplication(startupFile?: string): void {
   registerAssetProtocol();
   createApplicationMenu();
 
@@ -590,14 +666,59 @@ app.whenReady().then(() => {
     await shell.openExternal(url);
   });
 
-  createWindow();
+  createWindow(startupFile);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
-});
+}
+
+/** 准备 Windows 应用配置并接管后续启动请求，让文件关联复用现有工作区。 */
+function startApplication(): void {
+  // Windows 将关联文件的路径作为参数传入。开发模式的额外首参是应用入口。
+  const markdownArgument = process.argv
+    .slice(process.defaultApp ? 2 : 1)
+    .find((argument) => !argument.startsWith("-") && isMarkdownPath(argument));
+  const startupFile = markdownArgument ? resolve(markdownArgument) : undefined;
+
+  if (process.platform === "win32" && app.isPackaged) {
+    if (!app.commandLine.hasSwitch("user-data-dir")) {
+      // 旧版允许多进程共用默认配置，仍运行的旧便携版会持有本地存储。新版使用独立配置。
+      const profilePath = resolve(app.getPath("userData"), "windows-profile");
+      try {
+        mkdirSync(profilePath, { recursive: true });
+        app.setPath("userData", profilePath);
+        app.setPath("sessionData", profilePath);
+      } catch {
+        dialog.showErrorBox("Markdown Viewer 启动失败", "无法创建应用配置目录，请检查目录权限。");
+        app.quit();
+        return;
+      }
+    }
+
+    if (!app.requestSingleInstanceLock({ startupFile })) {
+      app.quit();
+      return;
+    }
+  }
+
+  const initialized = app.whenReady().then(() => initializeApplication(startupFile));
+  app.on("second-instance", (_event, _commandLine, _workingDirectory, data) => {
+    const file = (data as { startupFile?: unknown } | undefined)?.startupFile;
+    const filePath = typeof file === "string" && isMarkdownPath(file) ? file : undefined;
+    void initialized.then(() => {
+      const workspace = applicationWindow;
+      if (!workspace || workspace.window.isDestroyed()) {
+        createWindow(filePath);
+        return;
+      }
+
+      workspace.activate(filePath);
+    });
+  });
+}
 
 app.on("window-all-closed", () => {
   app.quit();
@@ -606,3 +727,4 @@ app.on("window-all-closed", () => {
 // 兼容 ESM 打包环境下的 __dirname。
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+startApplication();

@@ -12,6 +12,7 @@ import {
   RefreshCcw,
   RotateCcw,
   Save,
+  SquareSplitHorizontal,
   Sun,
   Trash2,
   ZoomIn
@@ -19,7 +20,7 @@ import {
 import type { Ref } from "react";
 import { SearchBox } from "./SearchBox";
 
-export type ViewMode = "preview" | "source";
+export type ViewMode = "preview" | "source" | "split";
 
 type TopBarProps = {
   fileName?: string;
@@ -165,6 +166,17 @@ export function TopBar({
           >
             <Code2 size={16} aria-hidden="true" />
             源码
+          </button>
+          <button
+            type="button"
+            className={viewMode === "split" ? "is-active" : ""}
+            onClick={() => onViewModeChange("split")}
+            disabled={!fileName}
+            aria-pressed={viewMode === "split"}
+            title="分栏模式（左预览，右源码）"
+          >
+            <SquareSplitHorizontal size={16} aria-hidden="true" />
+            分栏
           </button>
         </div>
         <div className="zoom-controls" aria-label="正文缩放">

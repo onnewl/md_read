@@ -1,9 +1,8 @@
 .markdown-body {
   zoom: var(--document-zoom);
-  width: min(940px, calc(100% - 48px));
   min-height: calc(100% - 48px);
-  margin: 24px auto;
-  padding: 34px 42px 64px;
+  margin: 24px var(--document-inline-gap);
+  padding: 34px 28px 64px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -223,20 +222,18 @@
 }
 
 .mermaid-block {
-  display: flex;
-  min-height: 120px;
-  align-items: center;
-  justify-content: center;
   overflow-x: auto;
+  overflow-y: hidden;
   margin: 1em 0;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
 }
 
-.mermaid-block svg {
-  max-width: 100%;
+.mermaid-block__diagram {
+  width: max-content;
+  margin-inline: auto;
+}
+
+.mermaid-block__diagram > svg {
+  display: block;
   height: auto;
 }
 
@@ -246,7 +243,6 @@
 }
 
 .mermaid-block--error {
-  display: block;
   color: var(--danger);
 }
 
@@ -285,8 +281,7 @@
 
 @media (max-width: 720px) {
   .markdown-body {
-    width: calc(100% - 24px);
-    margin: 12px;
+    margin-block: 12px;
     padding: 24px 20px 48px;
     font-size: 15px;
   }

@@ -21,6 +21,7 @@ function getExtension(src: string): string {
 }
 
 contextBridge.exposeInMainWorld("mdApi", {
+  openStartupMarkdownFile: () => ipcRenderer.invoke("markdown:open-startup-file") as Promise<MarkdownFilePayload | null>,
   openMarkdownFile: () => ipcRenderer.invoke("markdown:open-file") as Promise<MarkdownFilePayload | null>,
   readMarkdownFile: (filePath: string) =>
     ipcRenderer.invoke("markdown:read-file", filePath) as Promise<MarkdownFilePayload>,
@@ -45,9 +46,18 @@ contextBridge.exposeInMainWorld("mdApi", {
   openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url) as Promise<void>,
   openContainingFolder: (filePath: string) =>
     ipcRenderer.invoke("shell:open-containing-folder", filePath) as Promise<void>,
+  showStartupWindow: () => ipcRenderer.send("window:startup-rendered"),
   setHasUnsavedChanges: (hasUnsavedChanges: boolean) =>
     ipcRenderer.send("window:set-unsaved-changes", hasUnsavedChanges),
   getDroppedFilePath: (file: File) => webUtils.getPathForFile(file),
+  onExternalFileOpen: (callback: (filePath: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, filePath: string) => callback(filePath);
+    ipcRenderer.on("markdown:open-external-file", listener);
+
+    return () => {
+      ipcRenderer.removeListener("markdown:open-external-file", listener);
+    };
+  },
   onMenuCommand: (callback: (command: MenuCommand) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, command: MenuCommand) => callback(command);
     ipcRenderer.on("app:menu-command", listener);

@@ -1,6 +1,6 @@
 {
   "name": "markdown-viewer",
-  "version": "0.1.26",
+  "version": "0.1.36",
   "description": "A secure local Markdown document viewer built with Electron, React and TypeScript.",
   "main": "out/main/index.js",
   "author": {
@@ -66,12 +66,14 @@
     "appId": "local.markdown.viewer",
     "productName": "Markdown Viewer",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "artifactBuildCompleted": "./build/update-portable.cjs",
     "files": [
       "out/**/*",
       "package.json",
       "LICENSE",
       "THIRD_PARTY_NOTICES.md",
-      "THIRD_PARTY_LICENSES.md"
+      "THIRD_PARTY_LICENSES.md",
+      "!**/node_modules/**"
     ],
     "directories": {
       "output": "release/${version}"
@@ -139,7 +141,8 @@
       "allowToChangeInstallationDirectory": true
     },
     "portable": {
-      "artifactName": "${productName}-${version}-${os}-${arch}-portable.${ext}"
+      "artifactName": "${productName}-${version}-${os}-${arch}-portable.${ext}",
+      "useZip": true
     }
   }
 }
